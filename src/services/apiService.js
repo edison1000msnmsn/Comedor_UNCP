@@ -1,3 +1,4 @@
+import { Capacitor, CapacitorHttp } from "@capacitor/core";
 import { API_BASE } from "../utils/constants.js";
 
 const DEFAULT_TIMEOUT = 8000;
@@ -14,20 +15,11 @@ async function request(path, options = {}) {
       ...(fetchOptions.headers || {})
     };
 
-    const response = await fetch(`${API_BASE}${path}`, {
-      ...fetchOptions,
-      headers,
-      signal: controller.signal
-    });
-
-    const text = await response.text();
-    const data = text ? JSON.parse(text) : {};
-
-    if (!response.ok) {
-      throw new Error(data.error || `HTTP ${response.status}`);
+    if (Capacitor.isNativePlatform()) {
+      return nativeRequest(path, { ...fetchOptions, headers, timeout });
     }
 
-    return data;
+    return browserRequest(path, { ...fetchOptions, headers, signal: controller.signal });
   } catch (error) {
     if (retries > 0 && error.name !== "AbortError") {
       await new Promise((resolve) => setTimeout(resolve, 300));
@@ -36,6 +28,48 @@ async function request(path, options = {}) {
     throw new Error(error.name === "AbortError" ? "Tiempo de espera agotado" : error.message);
   } finally {
     clearTimeout(timer);
+  }
+}
+
+async function browserRequest(path, fetchOptions) {
+  const response = await fetch(`${API_BASE}${path}`, fetchOptions);
+  const text = await response.text();
+  const data = parsePayload(text);
+
+  if (!response.ok) {
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+
+  return data;
+}
+
+async function nativeRequest(path, fetchOptions) {
+  const method = String(fetchOptions.method || "GET").toUpperCase();
+  const response = await CapacitorHttp.request({
+    url: `${API_BASE}${path}`,
+    method,
+    headers: fetchOptions.headers,
+    data: parsePayload(fetchOptions.body),
+    connectTimeout: fetchOptions.timeout,
+    readTimeout: fetchOptions.timeout,
+    responseType: "json"
+  });
+
+  const data = typeof response.data === "string" ? parsePayload(response.data) : response.data || {};
+  if (response.status < 200 || response.status >= 300) {
+    throw new Error(data.error || `HTTP ${response.status}`);
+  }
+
+  return data;
+}
+
+function parsePayload(value) {
+  if (!value) return {};
+  if (typeof value !== "string") return value;
+  try {
+    return JSON.parse(value);
+  } catch {
+    return {};
   }
 }
 

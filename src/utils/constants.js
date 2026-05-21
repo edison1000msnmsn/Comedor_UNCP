@@ -11,7 +11,8 @@ export const COLORS = {
   warning: "#f59e0b"
 };
 
-export const API_BASE = import.meta.env.VITE_API_BASE || "http://localhost:3000";
+export const API_BASE =
+  import.meta.env.VITE_API_BASE || "https://comedoruncp-production.up.railway.app";
 export const UNCP_ENDPOINT =
   import.meta.env.VITE_UNCP_ENDPOINT || "https://comedor.uncp.edu.pe/charola";
 export const MOCK_UNCP = String(import.meta.env.VITE_MOCK_UNCP ?? "true") === "true";
