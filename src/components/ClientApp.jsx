@@ -326,7 +326,7 @@ export default function ClientApp({ deviceId, onBack }) {
           </span>
           <p className="target-time">Objetivo: {targetDate.toLocaleTimeString("es-PE")}</p>
           {config?.openAheadSeconds > 0 && (
-            <p className="summary-note">La web se abre {config.openAheadSeconds} segundos antes para que el usuario complete el registro.</p>
+            <p className="summary-note">La web se abre {config.openAheadSeconds} segundos antes para cargarla con tiempo y dejar el registro listo para el usuario.</p>
           )}
           <strong className={`countdown ${readyToOpen ? "pulse" : ""}`}>{countdown}</strong>
           <div className="summary-list">

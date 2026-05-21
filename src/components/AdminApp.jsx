@@ -276,7 +276,7 @@ export default function AdminApp({ onBack }) {
             {[
               ["targetHour", "Hora objetivo", 0, 23],
               ["targetMinute", "Minuto objetivo", 0, 59],
-              ["openAheadSeconds", "Abrir web segundos antes", 0, 60]
+              ["openAheadSeconds", "Abrir web segundos antes", 0, 300]
             ].map(([key, label, min, max]) => (
               <label className="range-field" key={key}>
                 <span>{label}<strong>{config[key]}</strong></span>
@@ -284,7 +284,7 @@ export default function AdminApp({ onBack }) {
               </label>
             ))}
             <div className="summary-note">
-              Modo asistido: la app avisa, copia datos y abre la web oficial. El estudiante genera el ticket manualmente.
+              Modo asistido rapido: la app prepara datos, avisa y abre la web oficial antes de la hora para que ya este cargada. El estudiante genera el ticket manualmente.
             </div>
           </section>
         )}

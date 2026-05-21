@@ -36,7 +36,7 @@ const ticketRequests = [];
 const config = {
   targetHour: 7,
   targetMinute: 0,
-  openAheadSeconds: 10
+  openAheadSeconds: 60
 };
 
 app.use(helmet());
@@ -306,7 +306,7 @@ app.post("/admin/config", requireAdmin, (req, res) => {
   }
   config.targetHour = Math.min(23, Math.max(0, config.targetHour));
   config.targetMinute = Math.min(59, Math.max(0, config.targetMinute));
-  config.openAheadSeconds = Math.min(60, Math.max(0, config.openAheadSeconds));
+  config.openAheadSeconds = Math.min(300, Math.max(0, config.openAheadSeconds));
   res.json({ config });
 });
 

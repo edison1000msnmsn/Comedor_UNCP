@@ -6,7 +6,7 @@ Aplicacion React + backend Express para gestion interna de cupos por DNI y asist
 
 - El administrador asigna cupos por DNI y revisa solicitudes.
 - El estudiante ingresa DNI y codigo universitario alfanumerico.
-- Si tiene cupo, la app copia datos, muestra contador y abre la web oficial en el horario configurado.
+- Si tiene cupo, la app copia datos, muestra contador y abre la web oficial hasta 5 minutos antes del horario configurado para que cargue con anticipacion.
 - El estudiante completa el formulario y genera el ticket manualmente en `https://comedor.uncp.edu.pe/charola`.
 - La app registra la confirmacion interna y guarda un comprobante local.
 
