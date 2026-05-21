@@ -1,0 +1,8 @@
+{
+  "appId": "pe.edu.uncp.comedorpro",
+  "appName": "Comedor UNCP Pro",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "https"
+  }
+}

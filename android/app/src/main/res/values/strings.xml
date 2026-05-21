@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Comedor UNCP Pro</string>
+    <string name="title_activity_main">Comedor UNCP Pro</string>
+    <string name="package_name">pe.edu.uncp.comedorpro</string>
+    <string name="custom_url_scheme">pe.edu.uncp.comedorpro</string>
+</resources>
