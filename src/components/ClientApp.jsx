@@ -1,4 +1,7 @@
 import html2canvas from "html2canvas";
+import { Browser } from "@capacitor/browser";
+import { Capacitor } from "@capacitor/core";
+import { Directory, Filesystem } from "@capacitor/filesystem";
 import { useEffect, useRef, useState } from "react";
 import LoadingSpinner from "./LoadingSpinner.jsx";
 import { useCountdown } from "../hooks/useCountdown.js";
@@ -15,42 +18,75 @@ export default function ClientApp({ deviceId, onBack }) {
   const [dni, setDni] = useState("");
   const [codigo, setCodigo] = useState("");
   const [tickets, setTickets] = useState(0);
+  const [verified, setVerified] = useState(false);
+  const [requestSent, setRequestSent] = useState(false);
   const [config, setConfig] = useState(null);
   const [status, setStatus] = useState("idle");
   const [loading, setLoading] = useState(false);
   const [logs, setLogs] = useState([]);
   const [successData, setSuccessData] = useState(null);
+  const [ticketSavedPath, setTicketSavedPath] = useState("");
   const firedRef = useRef(false);
+  const autoTicketRef = useRef(false);
   const { countdown, remainingMs, targetDate } = useCountdown(config, screen === "live");
 
   const dniOk = validateDNI(dni);
   const codigoOk = validateCodigo(codigo);
 
-  async function loadTickets() {
+  async function loadTickets(dniValue = dni) {
+    if (!validateDNI(dniValue)) return 0;
     try {
-      const data = await api.get(`/api/device/${encodeURIComponent(deviceId)}/tickets`);
+      const data = await api.get(`/api/student/${encodeURIComponent(dniValue)}/tickets?deviceId=${encodeURIComponent(deviceId)}`);
       setTickets(data.tickets || 0);
+      setVerified(true);
+      return data.tickets || 0;
     } catch (error) {
       notify("warning", "No se pudo consultar tickets. Verifica el backend.");
+      return 0;
     }
   }
 
   useEffect(() => {
-    if (deviceId) loadTickets();
-  }, [deviceId]);
+    if (dniOk) loadTickets(dni);
+    if (!dniOk) {
+      setTickets(0);
+      setVerified(false);
+      setRequestSent(false);
+    }
+  }, [dni, deviceId]);
 
   async function continueLogin() {
     if (!dniOk || !codigoOk) {
       notify("warning", "Revisa DNI y codigo universitario.");
       return;
     }
-    await loadTickets();
+    const available = await loadTickets(dni);
+    if (available <= 0) {
+      await requestTicket();
+      return;
+    }
     setScreen("confirm");
+  }
+
+  async function requestTicket() {
+    setLoading(true);
+    try {
+      await api.post(`/api/student/${encodeURIComponent(dni)}/request-ticket`, {
+        codigo,
+        deviceId
+      });
+      setRequestSent(true);
+      notify("success", "Solicitud enviada al administrador.");
+    } catch (error) {
+      notify("error", error.message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   async function startRegistration() {
     if (tickets <= 0) {
-      notify("error", "Este dispositivo no tiene tickets disponibles.");
+      notify("error", "Este DNI no tiene tickets disponibles.");
       return;
     }
 
@@ -83,7 +119,7 @@ export default function ClientApp({ deviceId, onBack }) {
     });
 
     if (result.successCount > 0) {
-      await api.post(`/api/device/${encodeURIComponent(deviceId)}/use-ticket`);
+      await api.post(`/api/student/${encodeURIComponent(dni)}/use-ticket`);
       await loadTickets();
       const payload = {
         dni,
@@ -110,15 +146,55 @@ export default function ClientApp({ deviceId, onBack }) {
     if (remainingMs <= preFireMs) fire();
   }, [screen, config, remainingMs]);
 
-  async function downloadTicket() {
+  async function captureTicketImage() {
     const element = document.getElementById("ticket-capture");
-    if (!element) return;
+    if (!element) return null;
     const canvas = await html2canvas(element, { backgroundColor: "#0f172a", scale: 2 });
+    return canvas.toDataURL("image/png");
+  }
+
+  async function saveTicketAndOpenOfficial(openOfficial = false) {
+    if (!successData) return;
+    try {
+      const dataUrl = await captureTicketImage();
+      if (!dataUrl) return;
+      const fileName = `${successData.ticketId}.png`;
+
+      if (Capacitor.isNativePlatform()) {
+        const base64 = dataUrl.split(",")[1];
+        const result = await Filesystem.writeFile({
+          path: fileName,
+          data: base64,
+          directory: Directory.Documents
+        });
+        setTicketSavedPath(result.uri || fileName);
+        notify("success", "Ticket guardado en el dispositivo.");
+      } else {
+        downloadDataUrl(dataUrl, fileName);
+      }
+
+      if (openOfficial) {
+        await Browser.open({ url: UNCP_ENDPOINT });
+      }
+    } catch (error) {
+      notify("warning", `No se pudo guardar automaticamente: ${error.message}`);
+      if (openOfficial) window.open(UNCP_ENDPOINT, "_blank", "noopener,noreferrer");
+    }
+  }
+
+  function downloadDataUrl(dataUrl, fileName) {
     const link = document.createElement("a");
-    link.href = canvas.toDataURL("image/png");
-    link.download = `${successData.ticketId}.png`;
+    link.href = dataUrl;
+    link.download = fileName;
     link.click();
   }
+
+  useEffect(() => {
+    if (screen !== "success" || !successData || autoTicketRef.current) return undefined;
+    autoTicketRef.current = true;
+    const id = setTimeout(() => saveTicketAndOpenOfficial(true), 650);
+    return () => clearTimeout(id);
+  }, [screen, successData]);
 
   if (screen === "login") {
     return (
@@ -136,15 +212,25 @@ export default function ClientApp({ deviceId, onBack }) {
           </label>
           <label className="field">
             <span>Codigo universitario</span>
-            <input value={codigo} inputMode="numeric" onChange={(event) => setCodigo(event.target.value.replace(/\D/g, ""))} placeholder="2021100001" />
-            {codigo && !codigoOk && <small>Usa entre 4 y 12 digitos.</small>}
+            <input value={codigo} autoCapitalize="characters" onChange={(event) => setCodigo(event.target.value.toUpperCase().replace(/[^A-Z0-9-]/g, ""))} placeholder="2021A0001" />
+            {codigo && !codigoOk && <small>Usa 4 a 16 caracteres: letras, numeros o guion.</small>}
           </label>
           <div className="ticket-meter">
-            <span>Tickets disponibles</span>
+            <span>{verified ? "Tickets disponibles para este DNI" : "Ingresa DNI para verificar cupo"}</span>
             <strong className={tickets > 0 ? "ok" : "bad"}>{tickets}</strong>
           </div>
+          {verified && tickets <= 0 && (
+            <div className="summary-note">
+              No tienes cupo asignado. Presiona continuar para enviar una solicitud al administrador y comunicate para confirmar el pago.
+            </div>
+          )}
+          {requestSent && (
+            <div className="summary-note ok">
+              Solicitud enviada. El administrador vera tu DNI y podra asignarte tickets.
+            </div>
+          )}
           <button className="btn btn-primary full" type="button" disabled={!dniOk || !codigoOk} onClick={continueLogin}>
-            Continuar
+            {loading ? <LoadingSpinner size="sm" text="Procesando" /> : tickets > 0 ? "Continuar" : "Solicitar ticket"}
           </button>
           <code className="device-code">Device {shortId(deviceId)}</code>
         </section>
@@ -216,8 +302,11 @@ export default function ClientApp({ deviceId, onBack }) {
             <p><span>Tiempo</span><b>{formatMs(successData.elapsedMs)}</b></p>
           </div>
         </section>
-        <button className="btn btn-primary full" type="button" onClick={downloadTicket}>Descargar ticket PNG</button>
-        <button className="btn btn-muted full" type="button" onClick={() => { setDni(""); setCodigo(""); setSuccessData(null); setScreen("login"); }}>
+        {ticketSavedPath && <p className="summary-note">Captura guardada: {ticketSavedPath}</p>}
+        <button className="btn btn-primary full" type="button" onClick={() => saveTicketAndOpenOfficial(true)}>
+          Guardar captura y abrir web oficial
+        </button>
+        <button className="btn btn-muted full" type="button" onClick={() => { setDni(""); setCodigo(""); setSuccessData(null); setTicketSavedPath(""); autoTicketRef.current = false; setScreen("login"); }}>
           Nuevo registro
         </button>
       </main>

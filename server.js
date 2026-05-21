@@ -31,7 +31,9 @@ const allowedOrigins = cleanEnv(
   .filter(Boolean);
 
 const devices = new Map();
+const students = new Map();
 const registrations = [];
+const ticketRequests = [];
 const config = {
   targetHour: 7,
   targetMinute: 0,
@@ -61,12 +63,30 @@ function ensureDevice(deviceId) {
   return devices.get(deviceId);
 }
 
+function ensureStudent(dni, data = {}) {
+  if (!students.has(dni)) {
+    students.set(dni, {
+      dni,
+      codigo: data.codigo || "",
+      tickets: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      last_device_id: data.deviceId || null
+    });
+  }
+  const student = students.get(dni);
+  if (data.codigo) student.codigo = data.codigo;
+  if (data.deviceId) student.last_device_id = data.deviceId;
+  student.updated_at = new Date().toISOString();
+  return student;
+}
+
 function validateDNI(dni) {
   return /^\d{8}$/.test(String(dni || ""));
 }
 
 function validateCodigo(codigo) {
-  return /^\d{4,12}$/.test(String(codigo || ""));
+  return /^[A-Za-z0-9-]{4,16}$/.test(String(codigo || ""));
 }
 
 function requireAdmin(req, res, next) {
@@ -140,6 +160,47 @@ app.get("/api/device/:deviceId/tickets", (req, res) => {
   res.json({ tickets: device.tickets });
 });
 
+app.get("/api/student/:dni/tickets", (req, res) => {
+  const { dni } = req.params;
+  if (!validateDNI(dni)) return res.status(400).json({ error: "DNI invalido" });
+  const student = ensureStudent(dni, { deviceId: req.query.deviceId });
+  res.json({ dni, tickets: student.tickets });
+});
+
+app.post("/api/student/:dni/request-ticket", (req, res) => {
+  const { dni } = req.params;
+  const { codigo, deviceId } = req.body || {};
+  if (!validateDNI(dni)) return res.status(400).json({ error: "DNI invalido" });
+  if (!validateCodigo(codigo)) return res.status(400).json({ error: "Codigo invalido" });
+
+  const student = ensureStudent(dni, { codigo, deviceId });
+  const existing = ticketRequests.find((request) => request.dni === dni && request.status === "pending");
+  if (existing) {
+    return res.json({ request: existing, tickets: student.tickets, message: "Solicitud pendiente existente" });
+  }
+
+  const request = {
+    id: uuidv4(),
+    dni,
+    codigo,
+    device_id: deviceId || null,
+    status: "pending",
+    timestamp: new Date().toISOString()
+  };
+  ticketRequests.push(request);
+  res.status(201).json({ request, tickets: student.tickets, message: "Solicitud registrada" });
+});
+
+app.post("/api/student/:dni/use-ticket", (req, res) => {
+  const { dni } = req.params;
+  if (!validateDNI(dni)) return res.status(400).json({ error: "DNI invalido" });
+  const student = ensureStudent(dni);
+  if (student.tickets <= 0) return res.status(403).json({ error: "Sin tickets disponibles" });
+  student.tickets -= 1;
+  student.updated_at = new Date().toISOString();
+  res.json({ tickets_remaining: student.tickets });
+});
+
 app.post("/api/device/:deviceId/use-ticket", (req, res) => {
   const device = ensureDevice(req.params.deviceId);
   if (device.tickets <= 0) return res.status(403).json({ error: "Sin tickets disponibles" });
@@ -150,11 +211,11 @@ app.post("/api/device/:deviceId/use-ticket", (req, res) => {
 
 app.post("/api/device/:deviceId/uncp-register", async (req, res, next) => {
   try {
-    const device = ensureDevice(req.params.deviceId);
     const { dni, codigo, shotNumber } = req.body || {};
     if (!validateDNI(dni)) return res.status(400).json({ error: "DNI invalido" });
     if (!validateCodigo(codigo)) return res.status(400).json({ error: "Codigo invalido" });
-    if (device.tickets <= 0) return res.status(403).json({ error: "Sin tickets disponibles" });
+    const student = ensureStudent(dni, { codigo, deviceId: req.params.deviceId });
+    if (student.tickets <= 0) return res.status(403).json({ error: "Sin tickets disponibles" });
 
     const response = await forwardToUncp({ dni, codigo, shotNumber });
     const registration = {
@@ -189,18 +250,69 @@ app.get("/admin/devices", requireAdmin, (_req, res) => {
   res.json({ devices: list });
 });
 
+app.get("/admin/students", requireAdmin, (_req, res) => {
+  const list = Array.from(students.values()).sort((a, b) => b.updated_at.localeCompare(a.updated_at));
+  res.json({ students: list });
+});
+
+app.get("/admin/ticket-requests", requireAdmin, (_req, res) => {
+  res.json({
+    total: ticketRequests.length,
+    requests: ticketRequests.slice().sort((a, b) => b.timestamp.localeCompare(a.timestamp))
+  });
+});
+
+app.post("/admin/ticket-requests/:requestId/resolve", requireAdmin, (req, res) => {
+  const request = ticketRequests.find((item) => item.id === req.params.requestId);
+  if (!request) return res.status(404).json({ error: "Solicitud no encontrada" });
+  request.status = req.body?.status === "rejected" ? "rejected" : "approved";
+  request.resolved_at = new Date().toISOString();
+  res.json({ request });
+});
+
 app.get("/admin/registrations", requireAdmin, (_req, res) => {
   res.json({ total: registrations.length, registrations: registrations.slice(-100) });
 });
 
 app.get("/admin/stats", requireAdmin, (_req, res) => {
   const today = new Date().toDateString();
+  const deviceTickets = Array.from(devices.values()).reduce((sum, item) => sum + item.tickets, 0);
+  const studentTickets = Array.from(students.values()).reduce((sum, item) => sum + item.tickets, 0);
   res.json({
     total_devices: devices.size,
-    total_tickets_in_system: Array.from(devices.values()).reduce((sum, item) => sum + item.tickets, 0),
+    total_students: students.size,
+    pending_requests: ticketRequests.filter((item) => item.status === "pending").length,
+    total_tickets_in_system: deviceTickets + studentTickets,
     total_registrations: registrations.length,
     registrations_today: registrations.filter((item) => new Date(item.timestamp).toDateString() === today).length
   });
+});
+
+function studentTicketOperation(req, res, operation) {
+  const { dni } = req.params;
+  if (!validateDNI(dni)) return res.status(400).json({ error: "DNI invalido" });
+  const amount = parseAmount(req, res);
+  if (amount === null) return undefined;
+  const student = ensureStudent(dni, { codigo: req.body?.codigo });
+
+  if (operation === "add") student.tickets += amount;
+  if (operation === "subtract") student.tickets = Math.max(0, student.tickets - amount);
+  if (operation === "set") student.tickets = amount;
+
+  student.updated_at = new Date().toISOString();
+  return res.json({ dni, tickets_total: student.tickets, student });
+}
+
+app.post("/admin/students/:dni/add-tickets", requireAdmin, (req, res) => {
+  studentTicketOperation(req, res, "add");
+});
+
+app.post("/admin/students/:dni/subtract-tickets", requireAdmin, (req, res) => {
+  studentTicketOperation(req, res, "subtract");
+});
+
+app.post("/admin/students/:dni/set-tickets", requireAdmin, (req, res) => {
+  studentTicketOperation(req, res, "set");
 });
 
 app.get("/admin/config", requireAdmin, (_req, res) => {
