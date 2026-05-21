@@ -1,6 +1,16 @@
 # COMEDOR UNCP PRO
 
-Aplicacion React + backend Express para gestion de tickets del comedor UNCP.
+Aplicacion React + backend Express para gestion interna de cupos por DNI y asistencia de registro en la web oficial del comedor UNCP.
+
+## Enfoque actual
+
+- El administrador asigna cupos por DNI y revisa solicitudes.
+- El estudiante ingresa DNI y codigo universitario alfanumerico.
+- Si tiene cupo, la app copia datos, muestra contador y abre la web oficial en el horario configurado.
+- El estudiante completa el formulario y genera el ticket manualmente en `https://comedor.uncp.edu.pe/charola`.
+- La app registra la confirmacion interna y guarda un comprobante local.
+
+La app no hace scraping, no automatiza clics y no envia peticiones directas a la pagina oficial UNCP.
 
 ## Ejecutar local
 
@@ -34,7 +44,6 @@ Backend: `http://localhost:3000`
 ## Seguridad de produccion
 
 - Cambia `ADMIN_PASSWORD` y `ADMIN_TOKEN` antes de exponer el servidor.
-- Mantiene `MOCK_UNCP=true` hasta tener autorizacion y contrato tecnico para usar el endpoint UNCP.
 - Configura `ALLOWED_ORIGINS` con el dominio real del frontend.
 - Usa HTTPS y un proxy reverso en produccion.
 - El almacenamiento actual es en memoria; para produccion real debe reemplazarse por PostgreSQL.

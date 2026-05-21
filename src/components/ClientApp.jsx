@@ -35,7 +35,8 @@ export default function ClientApp({ deviceId, onBack }) {
 
   const dniOk = validateDNI(dni);
   const codigoOk = validateCodigo(codigo);
-  const readyToOpen = remainingMs <= 0;
+  const openAheadMs = Number(config?.openAheadSeconds || 0) * 1000;
+  const readyToOpen = remainingMs <= openAheadMs;
 
   useEffect(() => {
     localStorage.setItem(SAVED_STUDENT_KEY, JSON.stringify({ dni, codigo }));
@@ -111,14 +112,14 @@ export default function ClientApp({ deviceId, onBack }) {
 
   useEffect(() => {
     if ((screen !== "ready" && screen !== "official") || !config || alertRef.current) return;
-    if (remainingMs <= 0) {
+    if (remainingMs <= openAheadMs) {
       alertRef.current = true;
-      notify("success", "Ya son las 7:00. Abre la web oficial y genera tu ticket.");
+      notify("success", "Abre la web oficial y genera tu ticket manualmente.");
       vibrate();
       beep();
       openOfficialWeb();
     }
-  }, [screen, config, remainingMs]);
+  }, [screen, config, remainingMs, openAheadMs]);
 
   async function copyText(value, label) {
     try {
@@ -143,9 +144,13 @@ export default function ClientApp({ deviceId, onBack }) {
   async function openOfficialWeb() {
     setOfficialOpened(true);
     setScreen("official");
-    if (Capacitor.isNativePlatform()) {
-      await Browser.open({ url: UNCP_ENDPOINT });
-    } else {
+    try {
+      if (Capacitor.isNativePlatform()) {
+        await Browser.open({ url: UNCP_ENDPOINT });
+        return;
+      }
+      window.open(UNCP_ENDPOINT, "_blank", "noopener,noreferrer");
+    } catch {
       window.open(UNCP_ENDPOINT, "_blank", "noopener,noreferrer");
     }
   }
@@ -153,21 +158,18 @@ export default function ClientApp({ deviceId, onBack }) {
   async function confirmOfficialTicket() {
     setLoading(true);
     try {
-      await api.post(`/api/student/${encodeURIComponent(dni)}/use-ticket`);
       await api.post(`/api/device/${encodeURIComponent(deviceId)}/uncp-register`, {
         dni,
-        codigo,
-        shotNumber: 1
+        codigo
       });
+      await api.post(`/api/student/${encodeURIComponent(dni)}/use-ticket`);
       await loadTickets();
       setSuccessData({
         dni,
         codigo,
         ticketId: `TCK-${Date.now().toString(36).toUpperCase()}`,
         timestamp: new Date().toISOString(),
-        elapsedMs: Date.now() - startRef.current,
-        shotsFired: 1,
-        shotsSuccess: 1
+        elapsedMs: Date.now() - startRef.current
       });
       setScreen("success");
       notify("success", "Ticket confirmado internamente.");
@@ -320,9 +322,12 @@ export default function ClientApp({ deviceId, onBack }) {
       <main className="app-shell narrow live-screen screen">
         <section className="panel centered">
           <span className={`status-badge ${readyToOpen ? "status-success" : "status-waiting"}`}>
-            {readyToOpen ? "Hora de registrar" : "Preparado"}
+            {readyToOpen ? "Abrir web oficial" : "Preparado"}
           </span>
           <p className="target-time">Objetivo: {targetDate.toLocaleTimeString("es-PE")}</p>
+          {config?.openAheadSeconds > 0 && (
+            <p className="summary-note">La web se abre {config.openAheadSeconds} segundos antes para que el usuario complete el registro.</p>
+          )}
           <strong className={`countdown ${readyToOpen ? "pulse" : ""}`}>{countdown}</strong>
           <div className="summary-list">
             <p><span>DNI</span><strong>{dni}</strong></p>

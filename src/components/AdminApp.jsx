@@ -252,7 +252,7 @@ export default function AdminApp({ onBack }) {
                   <th>Hora</th>
                   <th>DNI</th>
                   <th>Codigo</th>
-                  <th>Shot</th>
+                  <th>Metodo</th>
                   <th>Estado</th>
                 </tr>
               </thead>
@@ -262,7 +262,7 @@ export default function AdminApp({ onBack }) {
                     <td>{formatDateTime(registration.timestamp)}</td>
                     <td>{registration.dni}</td>
                     <td>{registration.codigo}</td>
-                    <td>{registration.shot_number}</td>
+                    <td>{registration.method || "asistido"}</td>
                     <td><span className={`pill ${registration.status}`}>{registration.status}</span></td>
                   </tr>
                 ))}
@@ -276,9 +276,7 @@ export default function AdminApp({ onBack }) {
             {[
               ["targetHour", "Hora objetivo", 0, 23],
               ["targetMinute", "Minuto objetivo", 0, 59],
-              ["preFireMs", "Pre-disparo ms", 0, 5000],
-              ["shots", "Numero de intentos", 1, 20],
-              ["intervalMs", "Intervalo ms", 0, 1000]
+              ["openAheadSeconds", "Abrir web segundos antes", 0, 60]
             ].map(([key, label, min, max]) => (
               <label className="range-field" key={key}>
                 <span>{label}<strong>{config[key]}</strong></span>
@@ -286,7 +284,7 @@ export default function AdminApp({ onBack }) {
               </label>
             ))}
             <div className="summary-note">
-              Ventana aproximada: {Number(config.preFireMs) + Number(config.shots) * Number(config.intervalMs)} ms.
+              Modo asistido: la app avisa, copia datos y abre la web oficial. El estudiante genera el ticket manualmente.
             </div>
           </section>
         )}

@@ -20,7 +20,6 @@ const PORT = Number(cleanEnv(process.env.PORT, "3000"));
 const ADMIN_EMAIL = cleanEnv(process.env.ADMIN_EMAIL, "admin@comedor-uncp.com");
 const ADMIN_PASSWORD = cleanEnv(process.env.ADMIN_PASSWORD, "change-this-password");
 const ADMIN_TOKEN = cleanEnv(process.env.ADMIN_TOKEN, "change-this-token");
-const MOCK_UNCP = cleanEnv(process.env.MOCK_UNCP, "true") === "true";
 const UNCP_ENDPOINT = cleanEnv(process.env.UNCP_ENDPOINT, "https://comedor.uncp.edu.pe/charola");
 const allowedOrigins = cleanEnv(
   process.env.ALLOWED_ORIGINS,
@@ -37,9 +36,7 @@ const ticketRequests = [];
 const config = {
   targetHour: 7,
   targetMinute: 0,
-  preFireMs: 800,
-  shots: 5,
-  intervalMs: 80
+  openAheadSeconds: 10
 };
 
 app.use(helmet());
@@ -105,38 +102,21 @@ function isAllowedOrigin(origin) {
   return false;
 }
 
-async function forwardToUncp({ dni, codigo, shotNumber }) {
-  if (MOCK_UNCP) {
-    await new Promise((resolve) => setTimeout(resolve, 80));
-    return { success: true, status: 200, message: "MOCK_UNCP activo", body: { shotNumber } };
-  }
-
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 5000);
-  try {
-    const response = await fetch(UNCP_ENDPOINT, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ dni, codigo, timestamp: new Date().toISOString() }),
-      signal: controller.signal
-    });
-    const body = await response.text();
-    return {
-      success: response.ok,
-      status: response.status,
-      message: response.ok ? "Aceptado por endpoint UNCP" : `UNCP HTTP ${response.status}`,
-      body: body.slice(0, 500)
-    };
-  } finally {
-    clearTimeout(timeout);
-  }
+async function recordAssistedConfirmation() {
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  return {
+    success: true,
+    status: 200,
+    message: "Confirmacion asistida registrada. No se enviaron solicitudes a UNCP."
+  };
 }
 
 app.get("/health", (_req, res) => {
   res.json({
     ok: true,
     service: "comedor-uncp-api",
-    mockUncp: MOCK_UNCP,
+    mode: "assisted_manual",
+    officialEndpoint: UNCP_ENDPOINT,
     port: PORT,
     allowedOrigins,
     time: new Date().toISOString()
@@ -211,19 +191,20 @@ app.post("/api/device/:deviceId/use-ticket", (req, res) => {
 
 app.post("/api/device/:deviceId/uncp-register", async (req, res, next) => {
   try {
-    const { dni, codigo, shotNumber } = req.body || {};
+    const { dni, codigo } = req.body || {};
     if (!validateDNI(dni)) return res.status(400).json({ error: "DNI invalido" });
     if (!validateCodigo(codigo)) return res.status(400).json({ error: "Codigo invalido" });
     const student = ensureStudent(dni, { codigo, deviceId: req.params.deviceId });
     if (student.tickets <= 0) return res.status(403).json({ error: "Sin tickets disponibles" });
 
-    const response = await forwardToUncp({ dni, codigo, shotNumber });
+    const response = await recordAssistedConfirmation();
     const registration = {
       id: uuidv4(),
       device_id: req.params.deviceId,
       dni,
       codigo,
-      shot_number: shotNumber || 1,
+      method: "assisted_manual",
+      shot_number: 1,
       timestamp: new Date().toISOString(),
       status: response.success ? "success" : "error",
       upstream_status: response.status,
@@ -320,14 +301,12 @@ app.get("/admin/config", requireAdmin, (_req, res) => {
 });
 
 app.post("/admin/config", requireAdmin, (req, res) => {
-  for (const key of ["targetHour", "targetMinute", "preFireMs", "shots", "intervalMs"]) {
+  for (const key of ["targetHour", "targetMinute", "openAheadSeconds"]) {
     if (req.body[key] !== undefined) config[key] = Number(req.body[key]);
   }
   config.targetHour = Math.min(23, Math.max(0, config.targetHour));
   config.targetMinute = Math.min(59, Math.max(0, config.targetMinute));
-  config.preFireMs = Math.min(5000, Math.max(0, config.preFireMs));
-  config.shots = Math.min(20, Math.max(1, config.shots));
-  config.intervalMs = Math.min(1000, Math.max(0, config.intervalMs));
+  config.openAheadSeconds = Math.min(60, Math.max(0, config.openAheadSeconds));
   res.json({ config });
 });
 
@@ -370,11 +349,11 @@ app.delete("/admin/devices/:deviceId", requireAdmin, (req, res) => {
 });
 
 app.use((error, _req, res, _next) => {
-  const message = error.name === "AbortError" ? "UNCP timeout" : error.message || "Internal server error";
+  const message = error.name === "AbortError" ? "Tiempo de espera agotado" : error.message || "Internal server error";
   res.status(500).json({ error: message });
 });
 
 app.listen(PORT, () => {
   console.log(`COMEDOR UNCP API listening on http://localhost:${PORT}`);
-  console.log(`MOCK_UNCP=${MOCK_UNCP}`);
+  console.log("MODE=assisted_manual");
 });
