@@ -7,31 +7,39 @@ import LoadingSpinner from "./LoadingSpinner.jsx";
 import { useCountdown } from "../hooks/useCountdown.js";
 import { useToast } from "../hooks/useToast.js";
 import { api } from "../services/apiService.js";
-import { uncpService } from "../services/uncpService.js";
-import { DEBUG, UNCP_ENDPOINT } from "../utils/constants.js";
+import { UNCP_ENDPOINT } from "../utils/constants.js";
 import { formatDateTime, formatMs, shortId } from "../utils/formatting.js";
 import { validateCodigo, validateDNI } from "../utils/validation.js";
 
+const SAVED_STUDENT_KEY = "comedor_uncp_student_data";
+
 export default function ClientApp({ deviceId, onBack }) {
   const notify = useToast();
+  const savedStudent = readSavedStudent();
   const [screen, setScreen] = useState("login");
-  const [dni, setDni] = useState("");
-  const [codigo, setCodigo] = useState("");
+  const [dni, setDni] = useState(savedStudent.dni || "");
+  const [codigo, setCodigo] = useState(savedStudent.codigo || "");
   const [tickets, setTickets] = useState(0);
   const [verified, setVerified] = useState(false);
   const [requestSent, setRequestSent] = useState(false);
   const [config, setConfig] = useState(null);
-  const [status, setStatus] = useState("idle");
   const [loading, setLoading] = useState(false);
-  const [logs, setLogs] = useState([]);
   const [successData, setSuccessData] = useState(null);
   const [ticketSavedPath, setTicketSavedPath] = useState("");
-  const firedRef = useRef(false);
+  const [officialOpened, setOfficialOpened] = useState(false);
+  const [copiedField, setCopiedField] = useState("");
+  const alertRef = useRef(false);
   const autoTicketRef = useRef(false);
-  const { countdown, remainingMs, targetDate } = useCountdown(config, screen === "live");
+  const startRef = useRef(0);
+  const { countdown, remainingMs, targetDate } = useCountdown(config, screen === "ready" || screen === "official");
 
   const dniOk = validateDNI(dni);
   const codigoOk = validateCodigo(codigo);
+  const readyToOpen = remainingMs <= 0;
+
+  useEffect(() => {
+    localStorage.setItem(SAVED_STUDENT_KEY, JSON.stringify({ dni, codigo }));
+  }, [dni, codigo]);
 
   async function loadTickets(dniValue = dni) {
     if (!validateDNI(dniValue)) return 0;
@@ -40,7 +48,7 @@ export default function ClientApp({ deviceId, onBack }) {
       setTickets(data.tickets || 0);
       setVerified(true);
       return data.tickets || 0;
-    } catch (error) {
+    } catch {
       notify("warning", "No se pudo consultar tickets. Verifica el backend.");
       return 0;
     }
@@ -71,10 +79,7 @@ export default function ClientApp({ deviceId, onBack }) {
   async function requestTicket() {
     setLoading(true);
     try {
-      await api.post(`/api/student/${encodeURIComponent(dni)}/request-ticket`, {
-        codigo,
-        deviceId
-      });
+      await api.post(`/api/student/${encodeURIComponent(dni)}/request-ticket`, { codigo, deviceId });
       setRequestSent(true);
       notify("success", "Solicitud enviada al administrador.");
     } catch (error) {
@@ -84,20 +89,19 @@ export default function ClientApp({ deviceId, onBack }) {
     }
   }
 
-  async function startRegistration() {
+  async function startAssistant() {
     if (tickets <= 0) {
       notify("error", "Este DNI no tiene tickets disponibles.");
       return;
     }
-
     setLoading(true);
     try {
       const targetConfig = await api.get("/api/config/target-time");
       setConfig(targetConfig);
-      setStatus("waiting");
-      setLogs([]);
-      firedRef.current = false;
-      setScreen("live");
+      setOfficialOpened(false);
+      alertRef.current = false;
+      startRef.current = Date.now();
+      setScreen("ready");
     } catch (error) {
       notify("error", error.message);
     } finally {
@@ -105,46 +109,99 @@ export default function ClientApp({ deviceId, onBack }) {
     }
   }
 
-  async function fire() {
-    firedRef.current = true;
-    setStatus("firing");
-    setLogs([]);
-    const startedAt = Date.now();
-    const result = await uncpService.fireShots({
-      deviceId,
-      dni,
-      codigo,
-      config,
-      onLog: (log) => setLogs((current) => [...current, log])
-    });
+  useEffect(() => {
+    if ((screen !== "ready" && screen !== "official") || !config || alertRef.current) return;
+    if (remainingMs <= 0) {
+      alertRef.current = true;
+      notify("success", "Ya son las 7:00. Abre la web oficial y genera tu ticket.");
+      vibrate();
+      beep();
+      openOfficialWeb();
+    }
+  }, [screen, config, remainingMs]);
 
-    if (result.successCount > 0) {
+  async function copyText(value, label) {
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(value);
+      } else {
+        const textarea = document.createElement("textarea");
+        textarea.value = value;
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
+      setCopiedField(label);
+      notify("success", `${label} copiado.`);
+      setTimeout(() => setCopiedField(""), 1200);
+    } catch {
+      notify("warning", `No se pudo copiar ${label}.`);
+    }
+  }
+
+  async function openOfficialWeb() {
+    setOfficialOpened(true);
+    setScreen("official");
+    if (Capacitor.isNativePlatform()) {
+      await Browser.open({ url: UNCP_ENDPOINT });
+    } else {
+      window.open(UNCP_ENDPOINT, "_blank", "noopener,noreferrer");
+    }
+  }
+
+  async function confirmOfficialTicket() {
+    setLoading(true);
+    try {
       await api.post(`/api/student/${encodeURIComponent(dni)}/use-ticket`);
+      await api.post(`/api/device/${encodeURIComponent(deviceId)}/uncp-register`, {
+        dni,
+        codigo,
+        shotNumber: 1
+      });
       await loadTickets();
-      const payload = {
+      setSuccessData({
         dni,
         codigo,
         ticketId: `TCK-${Date.now().toString(36).toUpperCase()}`,
         timestamp: new Date().toISOString(),
-        elapsedMs: Date.now() - startedAt,
-        shotsFired: config?.shots || 1,
-        shotsSuccess: result.successCount
-      };
-      setSuccessData(payload);
-      setStatus("success");
+        elapsedMs: Date.now() - startRef.current,
+        shotsFired: 1,
+        shotsSuccess: 1
+      });
       setScreen("success");
-      notify("success", "Registro completado.");
-    } else {
-      setStatus("error");
-      notify("error", "Todos los intentos fallaron.");
+      notify("success", "Ticket confirmado internamente.");
+    } catch (error) {
+      notify("error", error.message);
+    } finally {
+      setLoading(false);
     }
   }
 
-  useEffect(() => {
-    if (screen !== "live" || !config || firedRef.current) return;
-    const preFireMs = Number(config.preFireMs || 0);
-    if (remainingMs <= preFireMs) fire();
-  }, [screen, config, remainingMs]);
+  function vibrate() {
+    if (navigator.vibrate) navigator.vibrate([220, 120, 220, 120, 420]);
+  }
+
+  function beep() {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const context = new AudioCtx();
+      const oscillator = context.createOscillator();
+      const gain = context.createGain();
+      oscillator.frequency.value = 880;
+      gain.gain.value = 0.08;
+      oscillator.connect(gain);
+      gain.connect(context.destination);
+      oscillator.start();
+      setTimeout(() => {
+        oscillator.stop();
+        context.close();
+      }, 260);
+    } catch {
+      // Audio is best-effort only.
+    }
+  }
 
   async function captureTicketImage() {
     const element = document.getElementById("ticket-capture");
@@ -159,23 +216,15 @@ export default function ClientApp({ deviceId, onBack }) {
       const dataUrl = await captureTicketImage();
       if (!dataUrl) return;
       const fileName = `${successData.ticketId}.png`;
-
       if (Capacitor.isNativePlatform()) {
         const base64 = dataUrl.split(",")[1];
-        const result = await Filesystem.writeFile({
-          path: fileName,
-          data: base64,
-          directory: Directory.Data
-        });
+        const result = await Filesystem.writeFile({ path: fileName, data: base64, directory: Directory.Data });
         setTicketSavedPath(result.uri || fileName);
         notify("success", "Ticket guardado en el dispositivo.");
       } else {
         downloadDataUrl(dataUrl, fileName);
       }
-
-      if (openOfficial) {
-        await Browser.open({ url: UNCP_ENDPOINT });
-      }
+      if (openOfficial) await Browser.open({ url: UNCP_ENDPOINT });
     } catch (error) {
       notify("warning", `No se pudo guardar automaticamente: ${error.message}`);
       if (openOfficial) window.open(UNCP_ENDPOINT, "_blank", "noopener,noreferrer");
@@ -192,7 +241,7 @@ export default function ClientApp({ deviceId, onBack }) {
   useEffect(() => {
     if (screen !== "success" || !successData || autoTicketRef.current) return undefined;
     autoTicketRef.current = true;
-    const id = setTimeout(() => saveTicketAndOpenOfficial(true), 650);
+    const id = setTimeout(() => saveTicketAndOpenOfficial(false), 650);
     return () => clearTimeout(id);
   }, [screen, successData]);
 
@@ -221,7 +270,7 @@ export default function ClientApp({ deviceId, onBack }) {
           </div>
           {verified && tickets <= 0 && (
             <div className="summary-note">
-              No tienes cupo asignado. Presiona continuar para enviar una solicitud al administrador y comunicate para confirmar el pago.
+              No tienes cupo asignado. Presiona continuar para enviar una solicitud al administrador.
             </div>
           )}
           {requestSent && (
@@ -229,7 +278,7 @@ export default function ClientApp({ deviceId, onBack }) {
               Solicitud enviada. El administrador vera tu DNI y podra asignarte tickets.
             </div>
           )}
-          <button className="btn btn-primary full" type="button" disabled={!dniOk || !codigoOk} onClick={continueLogin}>
+          <button className="btn btn-primary full" type="button" disabled={!dniOk || !codigoOk || loading} onClick={continueLogin}>
             {loading ? <LoadingSpinner size="sm" text="Procesando" /> : tickets > 0 ? "Continuar" : "Solicitar ticket"}
           </button>
           <code className="device-code">Device {shortId(deviceId)}</code>
@@ -243,42 +292,54 @@ export default function ClientApp({ deviceId, onBack }) {
       <main className="app-shell narrow screen">
         <section className="panel">
           <div className="section-title">
-            <span>Confirmacion</span>
-            <h1>Registro al comedor</h1>
+            <span>Preparacion</span>
+            <h1>Listo para la web oficial</h1>
           </div>
           <div className="summary-list">
             <p><span>DNI</span><strong>{dni}</strong></p>
             <p><span>Codigo</span><strong>{codigo}</strong></p>
-            <p><span>Costo</span><strong>1 ticket</strong></p>
-            <p><span>Destino</span><code>{UNCP_ENDPOINT}</code></p>
+            <p><span>Costo interno</span><strong>1 ticket</strong></p>
+            <p><span>Web oficial</span><code>{UNCP_ENDPOINT}</code></p>
           </div>
-          <button className="btn btn-primary full" type="button" disabled={loading} onClick={startRegistration}>
-            {loading ? <LoadingSpinner size="sm" text="Conectando" /> : "Aceptar"}
+          <div className="copy-grid">
+            <button className="btn btn-muted" type="button" onClick={() => copyText(dni, "DNI")}>{copiedField === "DNI" ? "DNI copiado" : "Copiar DNI"}</button>
+            <button className="btn btn-muted" type="button" onClick={() => copyText(codigo, "Codigo")}>{copiedField === "Codigo" ? "Codigo copiado" : "Copiar codigo"}</button>
+          </div>
+          <button className="btn btn-primary full" type="button" disabled={loading} onClick={startAssistant}>
+            {loading ? <LoadingSpinner size="sm" text="Conectando" /> : "Preparar contador"}
           </button>
+          <button className="btn btn-blue full" type="button" onClick={openOfficialWeb}>Abrir web oficial ahora</button>
           <button className="btn btn-muted full" type="button" onClick={() => setScreen("login")}>Cancelar</button>
         </section>
       </main>
     );
   }
 
-  if (screen === "live") {
+  if (screen === "ready" || screen === "official") {
     return (
       <main className="app-shell narrow live-screen screen">
         <section className="panel centered">
-          <span className={`status-badge status-${status}`}>{status === "waiting" ? "Esperando" : status === "firing" ? "Disparando" : status === "success" ? "Exito" : "Error"}</span>
+          <span className={`status-badge ${readyToOpen ? "status-success" : "status-waiting"}`}>
+            {readyToOpen ? "Hora de registrar" : "Preparado"}
+          </span>
           <p className="target-time">Objetivo: {targetDate.toLocaleTimeString("es-PE")}</p>
-          <strong className={`countdown ${status === "firing" ? "pulse" : ""}`}>{countdown}</strong>
-          {status === "waiting" && <button className="btn btn-muted full" type="button" onClick={() => setScreen("confirm")}>Cancelar</button>}
-          {logs.length > 0 && (
-            <div className="log-box">
-              {logs.map((log) => (
-                <p key={log.shotNumber} className={log.status}>
-                  Shot {log.shotNumber}: {log.message} ({formatMs(log.elapsedMs)})
-                </p>
-              ))}
-            </div>
-          )}
-          {DEBUG && <code>{JSON.stringify(config)}</code>}
+          <strong className={`countdown ${readyToOpen ? "pulse" : ""}`}>{countdown}</strong>
+          <div className="summary-list">
+            <p><span>DNI</span><strong>{dni}</strong></p>
+            <p><span>Codigo</span><strong>{codigo}</strong></p>
+          </div>
+          <div className="copy-grid">
+            <button className="btn btn-muted" type="button" onClick={() => copyText(dni, "DNI")}>Copiar DNI</button>
+            <button className="btn btn-muted" type="button" onClick={() => copyText(codigo, "Codigo")}>Copiar codigo</button>
+          </div>
+          <button className="btn btn-primary full" type="button" onClick={openOfficialWeb}>
+            {officialOpened ? "Reabrir web oficial" : "Abrir web oficial"}
+          </button>
+          <button className="btn btn-blue full" type="button" disabled={loading} onClick={confirmOfficialTicket}>
+            {loading ? <LoadingSpinner size="sm" text="Confirmando" /> : "Ya obtuve el ticket oficial"}
+          </button>
+          {!Capacitor.isNativePlatform() && <iframe className="official-frame" title="Comedor UNCP" src={UNCP_ENDPOINT} />}
+          <button className="btn btn-muted full" type="button" onClick={() => setScreen("confirm")}>Volver</button>
         </section>
       </main>
     );
@@ -289,8 +350,8 @@ export default function ClientApp({ deviceId, onBack }) {
       <main className="app-shell narrow screen">
         <section className="success-head">
           <span className="success-icon">OK</span>
-          <h1>Registrado en UNCP</h1>
-          <p>{successData.shotsSuccess} de {successData.shotsFired} intentos exitosos</p>
+          <h1>Ticket confirmado</h1>
+          <p>Registro interno actualizado</p>
         </section>
         <section id="ticket-capture" className="ticket-card">
           <span>Ticket comedor UNCP</span>
@@ -306,7 +367,7 @@ export default function ClientApp({ deviceId, onBack }) {
         <button className="btn btn-primary full" type="button" onClick={() => saveTicketAndOpenOfficial(true)}>
           Guardar captura y abrir web oficial
         </button>
-        <button className="btn btn-muted full" type="button" onClick={() => { setDni(""); setCodigo(""); setSuccessData(null); setTicketSavedPath(""); autoTicketRef.current = false; setScreen("login"); }}>
+        <button className="btn btn-muted full" type="button" onClick={() => { setSuccessData(null); setTicketSavedPath(""); autoTicketRef.current = false; setScreen("login"); }}>
           Nuevo registro
         </button>
       </main>
@@ -314,4 +375,12 @@ export default function ClientApp({ deviceId, onBack }) {
   }
 
   return null;
+}
+
+function readSavedStudent() {
+  try {
+    return JSON.parse(localStorage.getItem(SAVED_STUDENT_KEY) || "{}");
+  } catch {
+    return {};
+  }
 }
