@@ -165,7 +165,7 @@ export default function ClientApp({ deviceId, onBack }) {
         const result = await Filesystem.writeFile({
           path: fileName,
           data: base64,
-          directory: Directory.Documents
+          directory: Directory.Data
         });
         setTicketSavedPath(result.uri || fileName);
         notify("success", "Ticket guardado en el dispositivo.");
