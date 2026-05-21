@@ -9,15 +9,25 @@ import { v4 as uuidv4 } from "uuid";
 dotenv.config({ override: true });
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
-const ADMIN_EMAIL = process.env.ADMIN_EMAIL || "admin@comedor-uncp.com";
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "change-this-password";
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN || "change-this-token";
-const MOCK_UNCP = String(process.env.MOCK_UNCP ?? "true") === "true";
-const UNCP_ENDPOINT = process.env.UNCP_ENDPOINT || "https://comedor.uncp.edu.pe/charola";
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || "http://localhost:5173,http://127.0.0.1:5173")
+
+function cleanEnv(value, fallback = "") {
+  return String(value ?? fallback)
+    .trim()
+    .replace(/^['"]|['"]$/g, "");
+}
+
+const PORT = Number(cleanEnv(process.env.PORT, "3000"));
+const ADMIN_EMAIL = cleanEnv(process.env.ADMIN_EMAIL, "admin@comedor-uncp.com");
+const ADMIN_PASSWORD = cleanEnv(process.env.ADMIN_PASSWORD, "change-this-password");
+const ADMIN_TOKEN = cleanEnv(process.env.ADMIN_TOKEN, "change-this-token");
+const MOCK_UNCP = cleanEnv(process.env.MOCK_UNCP, "true") === "true";
+const UNCP_ENDPOINT = cleanEnv(process.env.UNCP_ENDPOINT, "https://comedor.uncp.edu.pe/charola");
+const allowedOrigins = cleanEnv(
+  process.env.ALLOWED_ORIGINS,
+  "capacitor://localhost,http://localhost,http://localhost:5173,http://127.0.0.1:5173"
+)
   .split(",")
-  .map((origin) => origin.trim())
+  .map((origin) => cleanEnv(origin))
   .filter(Boolean);
 
 const devices = new Map();
@@ -35,7 +45,7 @@ app.use(express.json({ limit: "128kb" }));
 app.use(
   cors({
     origin(origin, callback) {
-      if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+      if (isAllowedOrigin(origin)) return callback(null, true);
       return callback(new Error("Origin not allowed by CORS"));
     },
     credentials: true
@@ -63,6 +73,16 @@ function requireAdmin(req, res, next) {
   const token = req.headers.authorization?.replace("Bearer ", "");
   if (!token || token !== ADMIN_TOKEN) return res.status(401).json({ error: "Unauthorized" });
   return next();
+}
+
+function isAllowedOrigin(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes("*") || allowedOrigins.includes(origin)) return true;
+  if (origin.startsWith("capacitor://")) return true;
+  if (origin === "http://localhost" || origin.startsWith("http://localhost:")) return true;
+  if (origin === "http://127.0.0.1" || origin.startsWith("http://127.0.0.1:")) return true;
+  if (origin.endsWith(".up.railway.app")) return true;
+  return false;
 }
 
 async function forwardToUncp({ dni, codigo, shotNumber }) {
@@ -93,7 +113,18 @@ async function forwardToUncp({ dni, codigo, shotNumber }) {
 }
 
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, mockUncp: MOCK_UNCP });
+  res.json({
+    ok: true,
+    service: "comedor-uncp-api",
+    mockUncp: MOCK_UNCP,
+    port: PORT,
+    allowedOrigins,
+    time: new Date().toISOString()
+  });
+});
+
+app.get("/", (_req, res) => {
+  res.type("text/plain").send("COMEDOR UNCP API is running. Use /health for status.");
 });
 
 app.post("/admin/login", (req, res) => {

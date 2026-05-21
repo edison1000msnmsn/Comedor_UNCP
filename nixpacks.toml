@@ -2,4 +2,4 @@
 cmds = ["npm ci"]
 
 [start]
-cmd = "npm run server"
+cmd = "node server.js"
